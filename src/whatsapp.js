@@ -159,6 +159,7 @@ export function createWhatsAppListener({ store, converter, logger }) {
     connecting = true;
     try {
       await loadSelectedGroup();
+      logger?.info?.({ selectedGroupId }, 'wa: selected group loaded');
       if (stopped) return;
 
       auth = await createAuthState({ store, logger });
@@ -193,6 +194,10 @@ export function createWhatsAppListener({ store, converter, logger }) {
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         for (const msg of messages) {
+          logger?.info?.(
+            { remote: msg?.key?.remote, fromMe: Boolean(msg?.key?.fromMe), id: msg?.key?.id },
+            'wa: incoming message'
+          );
           try {
             await processMessage(msg, sock);
           } catch (err) {
@@ -210,32 +215,51 @@ export function createWhatsAppListener({ store, converter, logger }) {
   }
 
   async function processMessage(msg, currentSock) {
-    if (!shouldProcessMessage(msg, { selectedGroupId })) return;
+    const remote = msg?.key?.remote;
+    const fromMe = Boolean(msg?.key?.fromMe);
+    if (!shouldProcessMessage(msg, { selectedGroupId })) {
+      logger?.info?.({ remote, fromMe, selectedGroupId }, 'wa: skip (group/own filter)');
+      return;
+    }
     const text = getMessageText(msg);
-    if (!text) return;
+    if (!text) {
+      logger?.info?.({ remote }, 'wa: skip (no text)');
+      return;
+    }
     const link = extractAppleMusicUrl(text);
-    if (!link) return;
+    if (!link) {
+      logger?.info?.({ remote, text: text.slice(0, 160) }, 'wa: skip (no Apple Music link)');
+      return;
+    }
 
     const dedupeKey = `${msg.key.remote}:${msg.key.id}`;
-    if (dedupe.has(dedupeKey)) return;
+    if (dedupe.has(dedupeKey)) {
+      logger?.info?.({ remote }, 'wa: skip (duplicate)');
+      return;
+    }
     dedupe.add(dedupeKey);
 
+    logger?.info?.({ remote, link }, 'wa: converting');
     let result;
     try {
       result = await converter.convert(link);
     } catch (err) {
       recordError(`Conversion failed: ${err.message}`);
+      logger?.info?.({ remote, err: err.message }, 'wa: conversion error (no reply)');
       return; // transient failure -> no reply
     }
 
     if (result.status === 'ok') {
+      logger?.info?.({ remote, spotifyUrl: result.spotifyUrl }, 'wa: replying with spotify url');
       await currentSock.sendMessage(msg.key.remote, { text: result.spotifyUrl });
     } else if (result.status === 'not_found') {
+      logger?.info?.({ remote }, 'wa: replying not-found');
       await currentSock.sendMessage(msg.key.remote, {
         text: `Couldn't find "${result.title}" by "${result.artists.join(', ')}" on Spotify.`,
       });
+    } else {
+      logger?.info?.({ remote, link }, 'wa: skip (invalid / not a song link)');
     }
-    // 'invalid' -> no reply
   }
 
   async function getGroups() {
