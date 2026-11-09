@@ -26,7 +26,28 @@ export function shouldProcessMessage(msg, { selectedGroupId }) {
   return true;
 }
 
+function makeBaileysLogger(logger) {
+  // Baileys emits very verbose info/debug logs (including full session dumps with
+  // Buffers) that are expensive for pino to serialize and can peg CPU. Forward only
+  // warnings and errors to our app logger, and drop the rest.
+  const warn = (obj, msg) => logger?.warn?.(obj, msg);
+  const error = (obj, msg) => logger?.error?.(obj, msg);
+  const noop = () => {};
+  return {
+    child: () => makeBaileysLogger(logger),
+    level: 'warn',
+    fatal: error,
+    warn,
+    error,
+    info: noop,
+    debug: noop,
+    trace: noop,
+    silent: noop,
+  };
+}
+
 export function createWhatsAppListener({ store, converter, logger }) {
+  const baileysLogger = makeBaileysLogger(logger);
   let sock = null;
   let auth = null;
   let connecting = false;
@@ -194,7 +215,7 @@ export function createWhatsAppListener({ store, converter, logger }) {
         printQRInTerminal: false,
         markOnlineOnConnect: true,
         syncFullHistory: false,
-        logger,
+        logger: baileysLogger,
       });
 
       sock.ev.on('creds.update', () => {
