@@ -96,8 +96,11 @@
       </div>
 
       <div class="card">
-        <h2>Monitored group</h2>
-        <p id="selected-group" class="muted">None selected</p>
+        <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">Monitored group</h2>
+          <button id="refresh-groups">Refresh groups</button>
+        </div>
+        <p id="selected-group" class="muted" style="margin-top:12px">None selected</p>
         <div class="groups" id="groups"></div>
         <p class="muted" style="margin-top:12px">Click a group to monitor it. Changes take effect immediately and persist across restarts.</p>
       </div>
@@ -161,6 +164,19 @@
     $('logout').addEventListener('click', async () => {
       await fetch('/admin/logout', { method: 'POST', credentials: 'same-origin' });
       showLogin();
+    });
+
+    $('refresh-groups').addEventListener('click', async () => {
+      const btn = $('refresh-groups');
+      btn.disabled = true;
+      btn.textContent = 'Refreshing…';
+      try {
+        await fetch('/api/groups/refresh', { method: 'POST', credentials: 'same-origin' });
+        await refresh();
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Refresh groups';
+      }
     });
 
     function setStatus(status) {

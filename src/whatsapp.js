@@ -46,6 +46,9 @@ export function createWhatsAppListener({ store, converter, logger }) {
   const errors = [];
   const dedupe = createDedupe({ ttlMs: 10 * 60 * 1000, max: 5000 });
 
+  let groupsCache = [];
+  let groupsLoading = false;
+
   function recordError(message) {
     lastError = message;
     errors.unshift({ at: new Date().toISOString(), message });
@@ -147,11 +150,22 @@ export function createWhatsAppListener({ store, converter, logger }) {
   }
 
   async function refreshGroups() {
-    if (!sock) return;
-    const groups = await sock.groupFetchAllParticipating();
-    for (const id in groups) {
-      if (id === selectedGroupId) selectedGroupName = groups[id].subject;
+    if (!sock || groupsLoading) return groupsCache;
+    groupsLoading = true;
+    try {
+      const groups = await sock.groupFetchAllParticipating();
+      groupsCache = Object.entries(groups).map(([id, g]) => ({
+        id,
+        name: g.subject || id,
+        participantCount: g.participants?.length ?? 0,
+      }));
+      for (const id in groups) {
+        if (id === selectedGroupId) selectedGroupName = groups[id].subject;
+      }
+    } finally {
+      groupsLoading = false;
     }
+    return groupsCache;
   }
 
   async function start() {
@@ -263,21 +277,26 @@ export function createWhatsAppListener({ store, converter, logger }) {
   }
 
   async function getGroups() {
-    if (!sock) return [];
-    const groups = await sock.groupFetchAllParticipating();
-    return Object.entries(groups).map(([id, g]) => ({
-      id,
-      name: g.subject || id,
-      participantCount: g.participants?.length ?? 0,
-    }));
+    // Serve the cached list (fast). If empty and connected, refresh in the background.
+    if (sock && groupsCache.length === 0 && !groupsLoading) {
+      void refreshGroups().catch((err) => logger?.warn?.({ err }, 'refreshGroups failed'));
+    }
+    return groupsCache.slice();
   }
 
   async function setSelectedGroup(id) {
     if (typeof id !== 'string' || !id) throw new Error('invalid group id');
-    if (sock) {
-      const groups = await sock.groupFetchAllParticipating();
-      if (!groups[id]) throw new Error('group not found');
-      selectedGroupName = groups[id].subject || id;
+    const cached = groupsCache.find((g) => g.id === id);
+    if (cached) {
+      selectedGroupName = cached.name;
+    } else if (sock) {
+      // Single-group metadata is far cheaper than re-fetching every group.
+      try {
+        const meta = await sock.groupMetadata(id);
+        selectedGroupName = meta.subject || id;
+      } catch {
+        throw new Error('group not found');
+      }
     }
     selectedGroupId = id;
     await store.set(SELECTED_GROUP_KEY, id);
@@ -306,6 +325,7 @@ export function createWhatsAppListener({ store, converter, logger }) {
     stop,
     getStatus,
     getGroups,
+    refreshGroups,
     setSelectedGroup,
     getErrors,
     processMessage,

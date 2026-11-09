@@ -110,6 +110,15 @@ export function createApp({ listener, converter, config, logger, adminHtml }) {
     }
   });
 
+  app.post('/api/groups/refresh', requireAuth, async (req, res, next) => {
+    try {
+      await listener.refreshGroups();
+      res.json(await listener.getGroups());
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post('/api/groups/select', requireAuth, async (req, res, next) => {
     const id = req.body?.id;
     if (typeof id !== 'string' || !id) {
