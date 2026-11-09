@@ -1,5 +1,5 @@
 javascript:(function(){
-    window.location.href = 'https://example.com';
+    var backend = 'https://YOUR-HOSTLESS-APP-URL'; // TODO: replace with your deployed MusicBridge URL
     var link = window.location.href;
-    window.location.href = 'https://musicbridge-848d.onrender.com/?link=' + encodeURIComponent(link);
+    window.location.href = backend + '/?link=' + encodeURIComponent(link);
 })();

@@ -1,82 +1,71 @@
-import express from 'express';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import * as dotenv from 'dotenv';
+import 'dotenv/config';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
+import pino from 'pino';
+import { loadConfig } from './src/config.js';
+import { createStore } from './src/store.js';
+import { createConverter } from './src/converter.js';
+import { createWhatsAppListener } from './src/whatsapp.js';
+import { createApp } from './src/server.js';
 
-dotenv.config()
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+async function main() {
+  const config = loadConfig();
+  const logger = pino({ level: config.logLevel });
 
-// Get Spotify token
-async function getSpotifyToken() {
-    const { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET } = process.env;
-    const token = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64');
-    const response = await axios.post('https://accounts.spotify.com/api/token',
-        'grant_type=client_credentials', {
-            headers: {
-                'Authorization': `Basic ${token}`,
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-        }
-    );
-    return response.data.access_token;
-}
+  const store = await createStore({
+    logger,
+    redisUrl: config.redisUrl,
+    dataDir: config.dataDir,
+  });
 
-// Scrape Apple Music metadata
-async function getAppleMetadata(link) {
-    const response = await axios.get(link);
-    const $ = cheerio.load(response.data);
+  const converter = createConverter({
+    credentials: { clientId: config.spotifyClientId, clientSecret: config.spotifyClientSecret },
+  });
 
-    const jsonLdScript = $('#schema\\:song').html(); // Escape colon for ID selector
-    const jsonLd = JSON.parse(jsonLdScript);
+  const listener = createWhatsAppListener({ store, converter, logger });
 
-    const title = jsonLd.name;
-    const artists = jsonLd.audio.byArtist.map(artist => artist.name);
+  const adminHtml = await readFile(path.join(__dirname, 'src', 'admin.html'), 'utf8');
+  const app = createApp({ listener, converter, config, logger, adminHtml });
 
-    return { title, artists };
-}
+  const server = app.listen(config.port, config.host, () => {
+    logger.info({ port: config.port, host: config.host }, 'MusicBridge listening');
+  });
 
-// Search Spotify
-async function searchSpotify(title, artists, token) {
-    const query = encodeURIComponent(`${title} ${artists.join(",")}`);
-    console.log("query: ", query)
-    const url = `https://api.spotify.com/v1/search?q=${query}&type=track&limit=1`;
+  // The WhatsApp listener starts at boot, independent of HTTP traffic.
+  await listener.start();
 
-    const response = await axios.get(url, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-        }
-    });
+  let shuttingDown = false;
+  async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ signal }, 'shutting down');
 
-    const items = response.data.tracks.items;
-    if (items.length === 0) return null;
-    return items[0].external_urls.spotify;
-}
-
-// Main route
-app.get('/', async (req, res) => {
-    const appleLink = req.query.link;
-    if (!appleLink || !appleLink.includes('music.apple.com')) {
-        return res.status(400).send('Invalid or missing Apple Music link.');
-    }
+    const force = setTimeout(() => {
+      logger.error('forced shutdown after timeout');
+      process.exit(1);
+    }, 5000);
+    force.unref();
 
     try {
-        const { title, artists } = await getAppleMetadata(appleLink);
-        const token = await getSpotifyToken();
-        const spotifyUrl = await searchSpotify(title, artists, token);
-
-        if (spotifyUrl) {
-            return res.redirect(spotifyUrl);
-        } else {
-            return res.status(404).send(`Could not find "${title}" by "${artist}" on Spotify.`);
-        }
+      await listener.stop();
+      await new Promise((resolve) => server.close(resolve));
+      await store.close();
+      process.exit(0);
     } catch (err) {
-        console.error(err.message);
-        return res.status(500).send('An error occurred.');
+      logger.error({ err }, 'shutdown error');
+      process.exit(1);
     }
-});
+  }
 
-app.listen(PORT, () => {
-    console.log(`MusicBridge running at http://localhost:${PORT}`);
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+main().catch((err) => {
+  // eslint-disable-next-line no-console
+  console.error('Fatal startup error:', err);
+  process.exit(1);
 });

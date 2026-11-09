@@ -1,4 +1,0 @@
-# Copy to .dev.vars for local `wrangler dev`, and set the real values.
-# For production, set them as secrets instead: `wrangler secret put SPOTIFY_CLIENT_ID` (and _SECRET).
-SPOTIFY_CLIENT_ID=your_client_id
-SPOTIFY_CLIENT_SECRET=your_client_secret

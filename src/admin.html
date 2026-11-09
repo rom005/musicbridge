@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MusicBridge Admin</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #181b21;
+      --border: #2a2f3a;
+      --text: #e6e8ec;
+      --muted: #9aa1ac;
+      --accent: #1db954;
+      --danger: #e5534b;
+      --warn: #d4a72c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 1.4rem; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .card h2 { margin: 0 0 12px; font-size: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .badge {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: .8rem; font-weight: 600; background: #262b35;
+    }
+    .badge.open { background: var(--accent); color: #04240f; }
+    .badge.qr, .badge.starting { background: var(--warn); color: #241c04; }
+    .badge.reconnecting, .badge.loggedOut, .badge.stopped { background: var(--danger); color: #fff; }
+    button {
+      font: inherit; cursor: pointer; border: 1px solid var(--border);
+      background: #242a35; color: var(--text); border-radius: 8px; padding: 8px 14px;
+    }
+    button:hover { border-color: #3a4353; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #04240f; font-weight: 600; }
+    button.selected { background: var(--accent); border-color: var(--accent); color: #04240f; }
+    input[type="password"] {
+      font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+      background: #0b0d11; color: var(--text); width: 100%; max-width: 320px;
+    }
+    .qr-box { text-align: center; }
+    .qr-box img { max-width: 260px; border-radius: 8px; border: 1px solid var(--border); }
+    .groups { display: grid; gap: 8px; }
+    .group {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
+    }
+    .group .meta { color: var(--muted); font-size: .85rem; }
+    .muted { color: var(--muted); }
+    ul { margin: 0; padding-left: 20px; }
+    .error-line { color: var(--muted); font-size: .85rem; }
+    .hidden { display: none; }
+    .logout { float: right; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>MusicBridge <button class="logout hidden" id="logout">Log out</button></h1>
+    <p class="sub">Apple Music → Spotify WhatsApp bot</p>
+
+    <div class="card hidden" id="login-card">
+      <h2>Sign in</h2>
+      <form id="login-form" class="row">
+        <input type="password" id="password" placeholder="Admin password" autocomplete="current-password" />
+        <button type="submit" class="primary">Sign in</button>
+      </form>
+      <p class="muted" id="login-error" style="color:var(--danger)"></p>
+    </div>
+
+    <div class="hidden" id="dashboard">
+      <div class="card">
+        <h2>Connection</h2>
+        <div class="row">
+          <span class="badge" id="status-badge">idle</span>
+          <span class="muted" id="status-detail"></span>
+        </div>
+        <div class="qr-box hidden" id="qr-box">
+          <h2>Scan to connect</h2>
+          <img id="qr-img" alt="WhatsApp QR code" />
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Monitored group</h2>
+        <p id="selected-group" class="muted">None selected</p>
+        <div class="groups" id="groups"></div>
+        <p class="muted" style="margin-top:12px">Click a group to monitor it. Changes take effect immediately and persist across restarts.</p>
+      </div>
+
+      <div class="card">
+        <h2>Recent errors</h2>
+        <ul id="errors"><li class="error-line">None</li></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let qrTimer = null;
+    let pollTimer = null;
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        ...options,
+      });
+      if (res.status === 401) {
+        showLogin();
+        return null;
+      }
+      return res;
+    }
+
+    function showLogin() {
+      $('login-card').classList.remove('hidden');
+      $('dashboard').classList.add('hidden');
+      $('logout').classList.add('hidden');
+      stopPolling();
+    }
+
+    function showDashboard() {
+      $('login-card').classList.add('hidden');
+      $('dashboard').classList.remove('hidden');
+      $('logout').classList.remove('hidden');
+      startPolling();
+    }
+
+    $('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const res = await fetch('/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ password: $('password').value }),
+      });
+      if (res.ok) {
+        $('password').value = '';
+        showDashboard();
+        await refresh();
+      } else {
+        $('login-error').textContent = 'Invalid password';
+      }
+    });
+
+    $('logout').addEventListener('click', async () => {
+      await fetch('/admin/logout', { method: 'POST', credentials: 'same-origin' });
+      showLogin();
+    });
+
+    function setStatus(status) {
+      const badge = $('status-badge');
+      badge.textContent = status.connection || 'idle';
+      badge.className = 'badge ' + (status.connection || 'idle');
+
+      const detail = $('status-detail');
+      const parts = [];
+      if (status.pushName) parts.push('account: ' + status.pushName);
+      if (status.startedAt) parts.push('connected at ' + new Date(status.startedAt).toLocaleString());
+      detail.textContent = parts.join(' · ');
+
+      const needsQr = ['qr', 'starting', 'idle', 'loggedOut'].includes(status.connection);
+      const qrBox = $('qr-box');
+      if (needsQr && status.qrDataUrl) {
+        qrBox.classList.remove('hidden');
+        $('qr-img').src = status.qrDataUrl;
+      } else {
+        qrBox.classList.add('hidden');
+      }
+
+      if (status.selectedGroupName) {
+        $('selected-group').textContent = status.selectedGroupName + ' (' + status.selectedGroupId + ')';
+      } else {
+        $('selected-group').textContent = 'None selected';
+      }
+    }
+
+    async function refresh() {
+      const status = await api('/api/status');
+      if (!status) return;
+      const s = await status.json();
+      setStatus(s);
+
+      const groupsRes = await api('/api/groups');
+      if (groupsRes) {
+        const groups = await groupsRes.json();
+        renderGroups(groups, s.selectedGroupId);
+      }
+
+      const errorsRes = await api('/api/errors');
+      if (errorsRes) {
+        const errors = await errorsRes.json();
+        renderErrors(errors);
+      }
+    }
+
+    function renderGroups(groups, selectedId) {
+      const box = $('groups');
+      box.innerHTML = '';
+      if (!groups.length) {
+        box.innerHTML = '<p class="muted">No groups found. Join a WhatsApp group with this account, then refresh.</p>';
+        return;
+      }
+      for (const g of groups) {
+        const div = document.createElement('div');
+        div.className = 'group';
+        const name = document.createElement('span');
+        name.textContent = g.name;
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = g.participantCount + ' members';
+        const btn = document.createElement('button');
+        btn.textContent = g.id === selectedId ? 'Monitoring' : 'Select';
+        if (g.id === selectedId) btn.className = 'selected';
+        btn.addEventListener('click', async () => {
+          const res = await fetch('/api/groups/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ id: g.id }),
+          });
+          if (res.ok) await refresh();
+        });
+        const metaBox = document.createElement('div');
+        metaBox.appendChild(name);
+        metaBox.appendChild(document.createElement('br'));
+        metaBox.appendChild(meta);
+        div.appendChild(metaBox);
+        div.appendChild(btn);
+        box.appendChild(div);
+      }
+    }
+
+    function renderErrors(errors) {
+      const ul = $('errors');
+      ul.innerHTML = '';
+      if (!errors.length) {
+        ul.innerHTML = '<li class="error-line">None</li>';
+        return;
+      }
+      for (const e of errors.slice(0, 10)) {
+        const li = document.createElement('li');
+        li.className = 'error-line';
+        li.textContent = '[' + e.at + '] ' + e.message;
+        ul.appendChild(li);
+      }
+    }
+
+    function startPolling() {
+      stopPolling();
+      refresh();
+      pollTimer = setInterval(refresh, 5000);
+    }
+
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (qrTimer) { clearInterval(qrTimer); qrTimer = null; }
+    }
+
+    // Boot: check auth by hitting /api/status.
+    (async () => {
+      const res = await api('/api/status');
+      if (res) showDashboard();
+      else showLogin();
+    })();
+  </script>
+</body>
+</html>
