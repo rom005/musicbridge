@@ -63,7 +63,14 @@ function createFileStore({ dataDir }) {
 }
 
 async function createRedisStore({ redisUrl, namespace }) {
-  const redis = new Redis(redisUrl, { maxRetriesPerRequest: 2 });
+  const options = { maxRetriesPerRequest: 2 };
+  // Hostless routes TLS by SNI, so the TLS server name must be the Redis host.
+  // ioredis does not always derive this from a rediss:// URL on its own.
+  const parsed = new URL(redisUrl);
+  if (parsed.protocol === 'rediss:') {
+    options.tls = { servername: parsed.hostname };
+  }
+  const redis = new Redis(redisUrl, options);
   await redis.ping(); // fail fast if the DB is unreachable
 
   const get = async (key) => redis.get(namespace + key);
