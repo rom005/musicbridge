@@ -52,7 +52,7 @@ function fakeSock() {
 }
 
 function makeMsg({ remote, id, fromMe = false, text }) {
-  return { key: { remote, id, fromMe }, message: { conversation: text } };
+  return { key: { remoteJid: remote, id, fromMe }, message: { conversation: text } };
 }
 
 test('getMessageText extracts text from common shapes', () => {

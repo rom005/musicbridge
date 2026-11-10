@@ -22,7 +22,7 @@ export function getMessageText(msg) {
 export function shouldProcessMessage(msg, { selectedGroupId }) {
   if (!msg || !selectedGroupId) return false;
   if (msg.key?.fromMe) return false;
-  if (msg.key?.remote !== selectedGroupId) return false;
+  if (msg.key?.remoteJid !== selectedGroupId) return false;
   return true;
 }
 
@@ -230,7 +230,7 @@ export function createWhatsAppListener({ store, converter, logger }) {
         if (type !== 'notify') return;
         for (const msg of messages) {
           logger?.info?.(
-            { remote: msg?.key?.remote, fromMe: Boolean(msg?.key?.fromMe), id: msg?.key?.id },
+            { remote: msg?.key?.remoteJid, fromMe: Boolean(msg?.key?.fromMe), id: msg?.key?.id },
             'wa: incoming message'
           );
           try {
@@ -250,7 +250,7 @@ export function createWhatsAppListener({ store, converter, logger }) {
   }
 
   async function processMessage(msg, currentSock) {
-    const remote = msg?.key?.remote;
+    const remote = msg?.key?.remoteJid;
     const fromMe = Boolean(msg?.key?.fromMe);
     if (!shouldProcessMessage(msg, { selectedGroupId })) {
       logger?.info?.({ remote, fromMe, selectedGroupId }, 'wa: skip (group/own filter)');
@@ -267,7 +267,7 @@ export function createWhatsAppListener({ store, converter, logger }) {
       return;
     }
 
-    const dedupeKey = `${msg.key.remote}:${msg.key.id}`;
+    const dedupeKey = `${msg.key.remoteJid}:${msg.key.id}`;
     if (dedupe.has(dedupeKey)) {
       logger?.info?.({ remote }, 'wa: skip (duplicate)');
       return;
@@ -286,10 +286,10 @@ export function createWhatsAppListener({ store, converter, logger }) {
 
     if (result.status === 'ok') {
       logger?.info?.({ remote, spotifyUrl: result.spotifyUrl }, 'wa: replying with spotify url');
-      await currentSock.sendMessage(msg.key.remote, { text: result.spotifyUrl });
+      await currentSock.sendMessage(msg.key.remoteJid, { text: result.spotifyUrl });
     } else if (result.status === 'not_found') {
       logger?.info?.({ remote }, 'wa: replying not-found');
-      await currentSock.sendMessage(msg.key.remote, {
+      await currentSock.sendMessage(msg.key.remoteJid, {
         text: `Couldn't find "${result.title}" by "${result.artists.join(', ')}" on Spotify.`,
       });
     } else {
